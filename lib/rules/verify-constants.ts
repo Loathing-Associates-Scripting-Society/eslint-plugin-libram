@@ -9,19 +9,24 @@ const SUBSTRING_MIN_LENGTH = 5;
 class TagInfo {
   singular: string;
   plural: string;
-  data: string[];
+  idMap: Map<number, string>;
   caseMap: Map<string, string>;
   prefixSuffixMap: Map<string, string[]>;
 
-  constructor(singular: string, plural: string, data: string[]) {
-    const dataParsed = ["none", ...data.map((s) => decodeEntities(s))];
+  constructor(singular: string, plural: string, data: [string, string][]) {
+    const dataParsed: [number, string][] = [
+      [0, "none"],
+      ...data.map(([id, name]): [number, string] => {
+        return [parseInt(id), decodeEntities(name)];
+      }),
+    ];
     this.singular = singular;
     this.plural = plural;
-    this.data = dataParsed;
-    this.caseMap = new Map(dataParsed.map((s) => [s.toLowerCase(), s]));
+    this.idMap = new Map(dataParsed.filter(([id]) => id !== 0));
+    this.caseMap = new Map(dataParsed.map(([, s]) => [s.toLowerCase(), s]));
 
     const prefixSuffixSetMap = new Map<string, Set<string>>();
-    for (const element of dataParsed) {
+    for (const [_, element] of dataParsed) {
       const elementLower = element.toLowerCase();
       const indices = Array.from(new Array(element.length).keys()).slice(
         SUBSTRING_MIN_LENGTH
@@ -31,9 +36,8 @@ class TagInfo {
           elementLower.slice(element.length - index),
           elementLower.slice(0, index),
         ]) {
-          let wholeStrings = prefixSuffixSetMap.get(substring);
-          if (!wholeStrings) {
-            wholeStrings = new Set();
+          const wholeStrings = prefixSuffixSetMap.get(substring) ?? new Set();
+          if (wholeStrings.size === 0) {
             prefixSuffixSetMap.set(substring, wholeStrings);
           }
           wholeStrings.add(element);
@@ -178,6 +182,7 @@ const rule: Rule.RuleModule = {
             const lowerCaseSegment = segment.toLowerCase();
             const properlyCapitalized =
               tagElements.caseMap.get(lowerCaseSegment);
+            const fromNumeric = tagElements.idMap.get(parseInt(segment));
             const disambiguations =
               tagElements.prefixSuffixMap.get(lowerCaseSegment);
 
@@ -199,6 +204,18 @@ const rule: Rule.RuleModule = {
                     },
                   });
                 }
+                // "Ignore parseInt results from segments like $item`1.0` or $item`22abcd`
+              } else if (
+                fromNumeric &&
+                segment === parseInt(segment).toString()
+              ) {
+                context.report({
+                  node,
+                  message: `Enumerated value name "${segment}" should be "${fromNumeric}" not an id.`,
+                  fix(fixer) {
+                    return fixer.replaceTextRange(range, fromNumeric);
+                  },
+                });
               } else if (disambiguations && disambiguations.length > 1) {
                 const suggestions = disambiguations.map((dis) => {
                   return {
